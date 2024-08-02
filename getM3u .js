@@ -1,60 +1,85 @@
-const axios = require('axios');
+// pages/api/generateM3u.js
 
-async function fetchData(url) {
+import fetch from "cross-fetch";
+
+const getUserChanDetails = async () => {
+    let hmacValue;
+    let obj = { list: [] };
+
     try {
-        const response = await axios.get(url);
-        return response.data;
+        const responseHmac = await fetch("https://fox.toxic-gang.xyz/tata/hmac");
+        const data = await responseHmac.json();
+        const hmacData = data[0];
+        hmacValue = hmacData.data.hdntl;
     } catch (error) {
-        throw new Error('Error fetching data from the URL: ' + error.message);
+        console.error('Error fetching HMAC data:', error);
+        return obj;
+    }
+
+    try {
+        const responseChannels = await fetch("https://fox.toxic-gang.xyz/tata/channels");
+        const cData = await responseChannels.json();
+
+        if (cData && cData.data && Array.isArray(cData.data)) {
+            cData.data.forEach(channel => {
+                let firstGenre = channel.genre || null;
+                let rearrangedChannel = {
+                    id: channel.id,
+                    name: channel.title,
+                    tvg_id: channel.id,
+                    group_title: firstGenre,
+                    tvg_logo: channel.logo,
+                    stream_url: channel.mpd, // Adjust this if the correct property is different
+                    license_url: null,
+                    stream_headers: null,
+                    drm: null,
+                    is_mpd: true,
+                    kid_in_mpd: channel.kid,
+                    hmac_required: null,
+                    key_extracted: null,
+                    pssh: channel.pssh,
+                    clearkey: channel.clearkeys_base64 ? JSON.stringify(channel.clearkeys_base64) : null,
+                    hma: hmacValue
+                };
+                obj.list.push(rearrangedChannel);
+            });
+        }
+    } catch (error) {
+        console.error('Fetch error:', error);
+        return obj;
+    }
+
+    return obj;
+};
+
+const generateM3u = async () => {
+    let m3uStr = '';
+
+    let userChanDetails = await getUserChanDetails();
+    let chansList = userChanDetails.list;
+
+    m3uStr = '#EXTM3U\n';
+
+    for (const channel of chansList) {
+        m3uStr += `#EXTINF:-1 tvg-id="${channel.id}" `;
+        m3uStr += `group-title="${channel.group_title}", tvg-logo="${channel.tvg_logo}", ${channel.name}\n`;
+        m3uStr += '#KODIPROP:inputstream.adaptive.license_type=clearkey\n';
+        m3uStr += `#KODIPROP:inputstream.adaptive.license_key=${channel.clearkey}\n`;
+        m3uStr += '#EXTVLCOPT:http-user-agent=Mozilla/5.0\n';
+        m3uStr += `#EXTHTTP:{"cookie":"${channel.hma}"}\n`;
+        m3uStr += `${channel.stream_url}|cookie:${channel.hma}\n\n`;
+    }
+
+    return m3uStr;
+};
+
+export default async function handler(req, res) {
+    try {
+        const m3uString = await generateM3u();
+        res.setHeader("Content-Type", "text/plain");
+        res.status(200).send(m3uString);
+    } catch (error) {
+        console.error('Error generating M3U:', error);
+        res.status(500).send('Error generating M3U');
     }
 }
-
-async function generateM3UPlaylist() {
-    try {
-        // URL of the JSON file
-        const jsonUrl = 'https://fox.toxic-gang.xyz/tata/channels';
-
-        // Fetch JSON data
-        const jsonData = await fetchData(jsonUrl);
-
-        // Validate data
-        if (!jsonData.data || !Array.isArray(jsonData.data)) {
-            throw new Error('Invalid JSON data or format');
-        }
-
-        // Fetch HMAC value
-        const hmacUrl = 'https://fox.toxic-gang.xyz/tata/hmac';
-        const hmacJson = await fetchData(hmacUrl);
-        const hmacValue = hmacJson[0]?.data?.hdntl;
-
-        if (!hmacValue) {
-            throw new Error('Error retrieving HMAC value');
-        }
-
-        // Generate M3U playlist
-        let m3u8Content = "#EXTM3U\n";
-
-        for (const channel of jsonData.data) {
-            const { id, title, logo, initialUrl, genre, licence1, licence2 } = channel;
-
-            // Construct the custom URL with the HMAC value
-            const customUrl = `${initialUrl}?cookie=${encodeURIComponent(hmacValue)}`;
-
-            // Create playlist entry
-            m3u8Content += `#EXTINF:-1 tvg-id="${id}" group-title="${genre}", tvg-logo="${logo}", ${title}\n`;
-            m3u8Content += "#KODIPROP:inputstream.adaptive.license_type=clearkey\n";
-            m3u8Content += `#KODIPROP:inputstream.adaptive.license_key=${licence1}:${licence2}\n`;
-            m3u8Content += `#EXTVLCOPT:http-user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36\n`;
-            m3u8Content += `#EXTHTTP:{"cookie":"${hmacValue}"}\n`;
-            m3u8Content += `${customUrl}\n\n`;
-        }
-
-        // Output the playlist
-        console.log(m3u8Content);
-    } catch (error) {
-        console.error(error.message);
-    }
-}
-
-// Run the function to generate M3U playlist
-generateM3UPlaylist();
